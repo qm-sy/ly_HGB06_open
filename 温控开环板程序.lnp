@@ -1,0 +1,6 @@
+"STARTUP.obj",
+"温控程序.obj",
+"modbus.obj",
+"crc.obj" 
+TO "温控开环板程序" 
+RAMSIZE(256) 

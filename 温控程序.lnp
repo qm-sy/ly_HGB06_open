@@ -1,0 +1,6 @@
+"STARTUP.obj",
+"ÎÂ¿Ø³ÌÐò.obj",
+"modbus.obj",
+"crc.obj" 
+TO "ÎÂ¿Ø³ÌÐò" 
+RAMSIZE(256) 

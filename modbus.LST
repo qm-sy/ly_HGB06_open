@@ -1,0 +1,735 @@
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MODBUS
+OBJECT MODULE PLACED IN modbus.OBJ
+COMPILER INVOKED BY: D:\APP\Keil_v5\C51\BIN\C51.EXE modbus.c LARGE OPTIMIZE(8,SPEED) BROWSE INCDIR(..\..\INC;..\温控程序
+                    --三路温控-modebus) DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include "modbus.h"
+   2          #include  "STC15W4Kxx.H"
+   3          #include "crc.h"
+   4          
+   5          #define FUNCTION_READ_COILS_1                 1     //读线圈，功能码 1
+   6          #define FUNCTION_READ_DISCREATE_INPUT_2       2     //读离散量输入，功能码 2
+   7          #define FUNCTION_READ_HOLDING_REGISTERS_3     3     //读保持寄存器，功能码 3
+   8          #define FUNCTION_READ_INPUT_REGISTERS_4       4     //读输入寄存器，功能码4
+   9          #define FUNCTION_WRITE_SINGLE_COIL_5          5     //写单个线圈，功能码 5
+  10          #define FUNCTION_WRITE_SINGLE_REGISTER_6      6     //写单个寄存器，功能码 6
+  11          #define FUNCTION_WRITE_MULTIPLE_COILS_F       0xf   //写多个线圈，功能码 0xf
+  12          #define FUNCTION_WRITE_MULTIPLE_REGISTERS_10  0x10  //写多个寄存器,功能码 0x10
+  13          #define FUNCTION_READ_WRITE_MULTIPLE_REGISTERS_17  0x17  //读写多个寄存器
+  14          
+  15          
+  16          #define uchar  unsigned char
+  17          #define uint   unsigned int
+  18          #define ulong  unsigned long
+  19          
+  20          
+  21          extern  uint  idata  tm1;
+  22          extern  uchar idata  temp_set;
+  23          
+  24          
+  25          extern uchar  idata  fan_close_cnt;
+  26          extern uchar  idata  fenduan_num;
+  27          extern uchar idata power_run;
+  28          
+  29          
+  30          extern  uchar idata  fan_num;
+  31          extern  uchar idata  tb_num;
+  32          extern  uchar idata  hot_num;
+  33          extern  uchar idata  mode_num;
+  34          
+  35          //extern  uchar   hot_power;
+  36          //extern  uchar   fan_power;
+  37          extern  uchar  idata hot_in_data;
+  38          
+  39          extern bit save_all_bit;
+  40          extern bit hot_power_bit;
+  41          extern bit mode_num_bit;
+  42          extern bit tb_num_bit;
+  43          extern bit power_on_bit;
+  44          extern bit power_on_bit2;
+  45          
+  46          extern unsigned char idata dev_address;                             //设备地址
+  47          unsigned char xdata dev_broadcast_address = 0;  //设备广播地址
+  48          
+  49          void  send_buffer(unsigned char *buf,int len);
+  50          //void  save_mode_wr(void);
+  51          //void  fan_close_save(void);
+  52          
+  53          unsigned char xdata send_modbus_buffer[256];
+  54          int xdata send_modbus_buf_count = 0;
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 2   
+
+  55          unsigned char xdata localbuf[256];
+  56          char xdata msg[64];
+  57          
+  58          
+  59          
+  60          
+  61          void send_bad_msg(unsigned char address,unsigned char function,unsigned char errorCode)
+  62          {
+  63   1              unsigned char return_msg[5];
+  64   1              unsigned short crc = 0;
+  65   1              
+  66   1              return_msg[0] = address;
+  67   1              return_msg[1] = 0x80 + function;
+  68   1              return_msg[2] = errorCode;
+  69   1              crc = crc16(return_msg,3);
+  70   1              return_msg[3] = crc;
+  71   1              return_msg[4] = crc >> 8;
+  72   1              send_buffer(return_msg,5);  //发送数据给主机
+  73   1      }
+  74          
+  75          int broadcast_process(unsigned char *buf,int len)
+  76          {        //广播地址
+  77   1              buf = buf;
+  78   1              len = len;
+  79   1              //debug_out("broadcast_process\r\n\0");
+  80   1              return 1;
+  81   1      }
+  82          
+  83           
+  84           /*
+  85          int write_multiple_register(unsigned short start_address,unsigned short value,unsigned char *localbuf,unsi
+             -gned char localbufLength)
+  86          {        //写多保持寄存器
+  87                  unsigned char index = 0;
+  88                  sprintf(msg,"write_multiple_register()\r\n\0");
+  89                  //debug_out(msg);
+  90                  sprintf(msg,"start_address=%u,cnt=%u\r\n\0",start_address,value);
+  91                  //debug_out(msg);
+  92                  for (index = 0; index < localbufLength; index++) {
+  93                          sprintf(msg,"buf[%d]=0x%x, %d\r\n\0",(int)index,(int)localbuf[index],(int)localbuf[index]);
+  94                          //debug_out(msg);
+  95                  }
+  96                  return 1;
+  97          }
+  98          
+  99            /*
+ 100          int write_multiple_coils(unsigned short start_address,unsigned short value,unsigned char *localbuf,unsigne
+             -d char localbufLength)
+ 101          {        //写多个线圈
+ 102                  unsigned char index = 0;
+ 103                  sprintf(msg,"write_multiple_coils()\r\n\0");
+ 104                  //debug_out(msg);
+ 105                  sprintf(msg,"start_address=%u,cnt=%u\r\n\0",start_address,value);
+ 106                  //debug_out(msg);
+ 107                  for (index = 0; index < localbufLength; index++) {
+ 108                          sprintf(msg,"buf[%d]=0x%x, %d\r\n\0",(int)index,(int)localbuf[index],(int)localbuf[index]);
+ 109                          //debug_out(msg);
+ 110                  }
+ 111                  return 1;
+ 112          }
+ 113          
+ 114           /*
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 3   
+
+ 115          int write_single_register(unsigned short address,unsigned short value)
+ 116          {         //写单个寄存器
+ 117                  save_mode_num();
+ 118                  return 1;
+ 119          } */
+ 120          
+ 121          
+ 122            /*
+ 123          int write_single_coil(unsigned short address,unsigned short value)
+ 124          {               //写单线圈寄存器
+ 125                  sprintf(msg,"write_single_coil()\r\n\0");
+ 126                  //debug_out(msg);
+ 127                  sprintf(msg,"start_address=%u,value=%u\r\n\0",address,value);
+ 128                  //debug_out(msg);
+ 129                  return 1;
+ 130          }
+ 131                     */
+ 132          
+ 133          //读线圈，功能码 1
+ 134          int function_READ_COILS_1(unsigned char *buf) 
+ 135          {
+ 136   1              int ret = 0;
+ 137   1              unsigned char out_count = 0;       //输出字节数
+ 138   1              unsigned short start_address = 0;  //起始地址
+ 139   1              unsigned short count = 0;          //输出数量
+ 140   1              unsigned short crc  = 0;
+ 141   1              int send_total_count = 0;
+ 142   1              
+ 143   1              
+ 144   1              //输入的起始地址和输出的数量
+ 145   1              start_address  = buf[2] << 8;
+ 146   1              start_address += buf[3];
+ 147   1              count  = buf[4] << 8;
+ 148   1              count += buf[5];
+ 149   1              //sprintf(msg,"addr=%u,count=%u\r\n\0",start_address,count);
+ 150   1              //debug_out(msg);
+ 151   1              
+ 152   1              //数量是否有效，如果无效 则发送异常码 3
+ 153   1              if (count < 1 || count > 0x07D0) {
+ 154   2                      send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+ 155   2                      ret = 1;
+ 156   2          return ret;         
+ 157   2              }
+ 158   1              
+ 159   1              //地址是否ok,地址+输出数量是否ok,否则发送 异常码 2
+ 160   1              
+ 161   1              //读取线圈是否ok,否则发送 异常码 4
+ 162   1              out_count = count / 8;
+ 163   1              if (count % 8 > 0) out_count++;
+ 164   1              send_modbus_buf_count = 0;
+ 165   1              send_modbus_buffer[0] = buf[0];   //地址
+ 166   1              send_modbus_buffer[1] = buf[1];   //功能
+ 167   1              send_modbus_buffer[2] = out_count;  //输出字节数
+ 168   1              while (out_count--) {
+ 169   2                send_modbus_buffer[3+send_modbus_buf_count] = P5; //线圈值
+ 170   2                      send_modbus_buf_count++;
+ 171   2        }             
+ 172   1              send_modbus_buffer[2] = send_modbus_buf_count;   //获取 字节数
+ 173   1              send_total_count = send_modbus_buf_count + 5;    //总的要发送的字节数
+ 174   1              crc = crc16(send_modbus_buffer,send_total_count-2);  //计算crc
+ 175   1              send_modbus_buffer[send_total_count-2] = crc; 
+ 176   1              send_modbus_buffer[send_total_count-1] = crc >> 8;
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 4   
+
+ 177   1              send_buffer(send_modbus_buffer,send_total_count);  //发送给主机
+ 178   1              
+ 179   1              
+ 180   1              return ret;
+ 181   1      }
+ 182          
+ 183          //读离散量输入，功能码 2
+ 184          int function_READ_DISCREATE_INPUT_2(unsigned char *buf)
+ 185          {
+ 186   1        int ret = 0;
+ 187   1              unsigned char out_count = 0;       //输出字节数
+ 188   1              unsigned short start_address = 0;  //起始地址
+ 189   1              unsigned short count = 0;          //输出数量
+ 190   1              unsigned short crc  = 0;
+ 191   1              int send_total_count = 0;
+ 192   1              
+ 193   1              //输入的起始地址和输出的数量
+ 194   1              start_address  = buf[2] << 8;
+ 195   1              start_address += buf[3];
+ 196   1              count  = buf[4] << 8;
+ 197   1              count += buf[5];
+ 198   1              //sprintf(msg,"addr=%u,count=%u\r\n\0",start_address,count);
+ 199   1              //debug_out(msg);
+ 200   1              
+ 201   1              //数量是否有效，如果无效 则发送异常码 3
+ 202   1              if (count < 1 || count > 0x07D0) {
+ 203   2                      send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+ 204   2                      ret = 1;
+ 205   2          return ret;         
+ 206   2              }
+ 207   1              
+ 208   1              //地址是否ok,地址+输出数量是否ok,否则发送 异常码 2
+ 209   1              
+ 210   1              //读取线圈是否ok,否则发送 异常码 4
+ 211   1              out_count = count / 8;
+ 212   1              if (count % 8 > 0) out_count++;
+ 213   1              send_modbus_buf_count = 0;
+ 214   1              send_modbus_buffer[0] = buf[0];   //地址
+ 215   1              send_modbus_buffer[1] = buf[1];   //功能
+ 216   1              send_modbus_buffer[2] = out_count;  //输出字节数
+ 217   1              while (out_count--) {
+ 218   2                send_modbus_buffer[3+send_modbus_buf_count] = P5; //线圈值
+ 219   2                      send_modbus_buf_count++;
+ 220   2        }             
+ 221   1              send_modbus_buffer[2] = send_modbus_buf_count;   //获取 字节数
+ 222   1              send_total_count = send_modbus_buf_count + 5;    //总的要发送的字节数
+ 223   1              crc = crc16(send_modbus_buffer,send_total_count-2);  //计算crc
+ 224   1              send_modbus_buffer[send_total_count-2] = crc; 
+ 225   1              send_modbus_buffer[send_total_count-1] = crc >> 8;
+ 226   1              send_buffer(send_modbus_buffer,send_total_count);  //发送给主机
+ 227   1              
+ 228   1              //debug_out("function_READ_DISCREATE_INPUT_2\r\n\0");
+ 229   1              return ret;
+ 230   1      }
+ 231          
+ 232          //读保持寄存器，功能码 3
+ 233          int function_READ_HOLDING_REGISTERS_3(unsigned char *buf)
+ 234          {
+ 235   1        int ret = 0;
+ 236   1              unsigned char out_count = 0;       //输出字节数
+ 237   1              unsigned short start_address = 0;  //起始地址
+ 238   1              unsigned short count = 0;          //输出数量
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 5   
+
+ 239   1              unsigned short crc  = 0;
+ 240   1              int send_total_count = 0;
+ 241   1              
+ 242   1              //输入的起始地址和输出的数量
+ 243   1              start_address  = buf[2] << 8;
+ 244   1              start_address += buf[3];
+ 245   1              count  = buf[4] << 8;
+ 246   1              count += buf[5];
+ 247   1              count-=3;
+ 248   1              
+ 249   1              
+ 250   1              //数量是否有效，如果无效 则发送异常码 3
+ 251   1              if (count < 1 || count > 0x07D) {
+ 252   2                      send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+ 253   2                      ret = 1;
+ 254   2          return ret;         
+ 255   2              }
+ 256   1              
+ 257   1              //地址是否ok,地址+输出数量是否ok,否则发送 异常码 2
+ 258   1              
+ 259   1              //读取寄存器是否ok,否则发送 异常码 4
+ 260   1              out_count = count / 8;
+ 261   1              if (count % 8 > 0) out_count++;
+ 262   1              send_modbus_buf_count = 0;
+ 263   1              send_modbus_buffer[0] = buf[0];   //地址
+ 264   1              send_modbus_buffer[1] = buf[1];   //功能
+ 265   1              send_modbus_buffer[2] = out_count;  //输出字节数
+ 266   1          if(start_address==40001)
+ 267   1               {
+ 268   2                while (count--) {
+ 269   3                
+ 270   3                send_modbus_buffer[3+send_modbus_buf_count] =mode_num;    send_modbus_buf_count++; //模式
+ 271   3                send_modbus_buffer[3+send_modbus_buf_count] =fenduan_num; send_modbus_buf_count++; //分段
+ 272   3      
+ 273   3                send_modbus_buffer[3+send_modbus_buf_count] =tb_num;   send_modbus_buf_count++; //同步
+ 274   3                send_modbus_buffer[3+send_modbus_buf_count] =fan_num;  send_modbus_buf_count++; //风力
+ 275   3                send_modbus_buffer[3+send_modbus_buf_count] =hot_num;  send_modbus_buf_count++; //加热程度
+ 276   3                send_modbus_buffer[3+send_modbus_buf_count] =power_run; send_modbus_buf_count++; //是否运行状态
+ 277   3      
+ 278   3                send_modbus_buffer[3+send_modbus_buf_count] =(uchar)tm1;    send_modbus_buf_count++; //温度实际值
+ 279   3                send_modbus_buffer[3+send_modbus_buf_count] =fan_close_cnt; send_modbus_buf_count++; //风扇延时时间
+ 280   3                } 
+ 281   2                send_modbus_buffer[2] = send_modbus_buf_count;        //重新计算获得 内容的字节数
+ 282   2                send_total_count = send_modbus_buf_count + 5;   //发送的总长度 字节数
+ 283   2                crc = crc16(send_modbus_buffer,send_total_count-2);  //计算crc校验和
+ 284   2                send_modbus_buffer[send_total_count-2] = crc; 
+ 285   2                send_modbus_buffer[send_total_count-1] = crc >> 8;
+ 286   2                send_buffer(send_modbus_buffer,send_total_count);  //发送给主机
+ 287   2                ret = 2;
+ 288   2               }
+ 289   1      
+ 290   1              else { send_bad_msg(buf[0],buf[1],2); ret = 1;}  //地址是否ok, 否则发送 异常码 2
+ 291   1              return ret;
+ 292   1      }
+ 293          
+ 294          //读输入寄存器，功能码4
+ 295          int function_READ_INPUT_REGISTERS_4(unsigned char *buf)
+ 296          {
+ 297   1              int ret = 0;
+ 298   1              unsigned char out_count = 0;       //输出字节数
+ 299   1              unsigned short start_address = 0;  //起始地址
+ 300   1              unsigned short count = 0;          //输出数量
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 6   
+
+ 301   1              unsigned short crc  = 0;
+ 302   1              int send_total_count = 0;
+ 303   1              
+ 304   1              //输入的起始地址和输出的数量
+ 305   1              start_address  = buf[2] << 8;
+ 306   1              start_address += buf[3];
+ 307   1              count  = buf[4] << 8;
+ 308   1              count += buf[5];
+ 309   1              count-=3;
+ 310   1              
+ 311   1              
+ 312   1              //数量是否有效，如果无效 则发送异常码 3
+ 313   1              if (count < 1 || count > 0x07D) {
+ 314   2                      send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+ 315   2                      ret = 1;
+ 316   2          return ret;         
+ 317   2              }
+ 318   1              
+ 319   1              //地址是否ok,地址+输出数量是否ok,否则发送 异常码 2
+ 320   1              
+ 321   1              //读取输入寄存器是否ok,否则发送 异常码 4
+ 322   1              
+ 323   1              send_modbus_buf_count = 0;
+ 324   1              send_modbus_buffer[0] = buf[0];   //地址
+ 325   1              send_modbus_buffer[1] = buf[1];   //功能
+ 326   1              send_modbus_buffer[2] = out_count;  //输出字节数
+ 327   1              if(start_address==40001)
+ 328   1               {                                                                                                                      
+ 329   2                while (count--) {
+ 330   3      
+ 331   3                send_modbus_buffer[3+send_modbus_buf_count] =mode_num;    send_modbus_buf_count++; //模式
+ 332   3                send_modbus_buffer[3+send_modbus_buf_count] =fenduan_num; send_modbus_buf_count++; //分段
+ 333   3      
+ 334   3                send_modbus_buffer[3+send_modbus_buf_count] =tb_num;   send_modbus_buf_count++; //同步
+ 335   3                send_modbus_buffer[3+send_modbus_buf_count] =fan_num;  send_modbus_buf_count++; //风力
+ 336   3                send_modbus_buffer[3+send_modbus_buf_count] =hot_num;  send_modbus_buf_count++; //加热程度
+ 337   3                send_modbus_buffer[3+send_modbus_buf_count] =temp_set; send_modbus_buf_count++; //温度设定值
+ 338   3      
+ 339   3                send_modbus_buffer[3+send_modbus_buf_count] =(uchar)tm1;    send_modbus_buf_count++; //温度实际值
+ 340   3                send_modbus_buffer[3+send_modbus_buf_count] =fan_close_cnt; send_modbus_buf_count++; //风扇延时时间
+ 341   3                } 
+ 342   2                send_modbus_buffer[2] = send_modbus_buf_count;        //重新计算获得 内容的字节数
+ 343   2                send_total_count = send_modbus_buf_count + 5;   //发送的总长度 字节数
+ 344   2                crc = crc16(send_modbus_buffer,send_total_count-2);  //计算crc校验和
+ 345   2                send_modbus_buffer[send_total_count-2] = crc; 
+ 346   2                send_modbus_buffer[send_total_count-1] = crc >> 8;
+ 347   2                send_buffer(send_modbus_buffer,send_total_count);  //发送给主机
+ 348   2               } 
+ 349   1              
+ 350   1      
+ 351   1              else { send_bad_msg(buf[0],buf[1],2); ret = 1;}  //地址是否ok, 否则发送 异常码 2
+ 352   1              return ret;
+ 353   1      }
+ 354          
+ 355          //写单个线圈，功能码 5
+ 356          int function_WRITE_SINGLE_COIL_5(unsigned char *buf,int len)
+ 357          {
+ 358   1              int ret = 0;
+ 359   1              unsigned short start_address = 0;  //起始地址
+ 360   1              unsigned short value = 0;          //输出量
+ 361   1              
+ 362   1              //输入的起始地址和输出的数量
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 7   
+
+ 363   1              start_address  = buf[2] << 8;
+ 364   1              start_address += buf[3];
+ 365   1              value  = buf[4] << 8;
+ 366   1              value += buf[5];
+ 367   1              
+ 368   1              
+ 369   1              //数量是否有效，如果无效 则发送异常码 3
+ 370   1              if (value != 0x0 && value != 0xFF00) {
+ 371   2                      send_bad_msg(buf[0],buf[1],3);   //发送 异常码 3 
+ 372   2                      ret = 1;
+ 373   2          return ret;         
+ 374   2              }
+ 375   1            //这里可以添加执行的数据或命令
+ 376   1      
+ 377   1              //if((start_address==40001)&&(value==0))            P27=0;
+ 378   1              //if((start_address==40001)&&(value==0xff00))   P27=1;
+ 379   1      
+ 380   1              
+ 381   1              //地址是否ok, 否则发送 异常码 2
+ 382   1              
+ 383   1      
+ 384   1          send_buffer(buf,len);            //发送 正确数据给主机      
+ 385   1              
+ 386   1              
+ 387   1              return ret;
+ 388   1      }
+ 389          
+ 390          //写单个寄存器，功能码 6
+ 391          int function_WRITE_SINGLE_REGISTER_6(unsigned char *buf,int len)
+ 392          {
+ 393   1        int ret = 0;
+ 394   1              unsigned short start_address = 0;  //起始地址
+ 395   1              unsigned short value = 0;          //输出量
+ 396   1              
+ 397   1              
+ 398   1              //输入的起始地址和输出的数量
+ 399   1              start_address  = buf[2] << 8;
+ 400   1              start_address += buf[3];
+ 401   1              value  = buf[4] << 8;
+ 402   1              value += buf[5];
+ 403   1              
+ 404   1              
+ 405   1              
+ 406   1              if (value < 0x0 || value > 0xFFFF) {
+ 407   2                      send_bad_msg(buf[0],buf[1],3);  
+ 408   2                      ret = 1;
+ 409   2          return ret;         
+ 410   2              }
+ 411   1              if(start_address==42005)         
+ 412   1                {
+ 413   2                 if((buf[5]>0)&&(buf[5]<5)) {
+ 414   3                   mode_num=buf[5];
+ 415   3                       mode_num_bit=1;
+ 416   3                   //save_mode_num();
+ 417   3                   //read_data();
+ 418   3                   send_buffer(buf,len);          
+ 419   3                       ret = 2;
+ 420   3                      }
+ 421   2                } 
+ 422   1              else if(start_address==42006)    
+ 423   1                {
+ 424   2                   tb_num=buf[5];
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 8   
+
+ 425   2                       tb_num_bit=1;
+ 426   2                   send_buffer(buf,len);            
+ 427   2                       ret = 2;
+ 428   2                      }  
+ 429   1                      
+ 430   1              else if(start_address==42007)    
+ 431   1                {
+ 432   2                   if(buf[5]==0x01) power_on_bit=1;
+ 433   2                       
+ 434   2                   send_buffer(buf,len);           
+ 435   2                       ret = 2;
+ 436   2                      }
+ 437   1      
+ 438   1          else if(start_address==42008)        
+ 439   1                {
+ 440   2                   if(buf[5]==0x02) power_on_bit2=1;
+ 441   2                       
+ 442   2                   send_buffer(buf,len);            
+ 443   2                       ret = 2;
+ 444   2                      }                               
+ 445   1              
+ 446   1              return ret;
+ 447   1      }
+ 448          
+ 449          
+ 450          
+ 451          
+ 452          
+ 453          
+ 454          
+ 455          
+ 456          
+ 457          
+ 458          int function_WRITE_MULTIPLE_COILS_F(unsigned char *buf)
+ 459          {
+ 460   1        int ret = 0;
+ 461   1              unsigned short crc = 0;
+ 462   1              unsigned short start_address = 0; 
+ 463   1              unsigned short count = 0;               
+ 464   1              unsigned char localbufLength = 0;
+ 465   1              unsigned char index = 0;
+ 466   1              
+ 467   1              
+ 468   1              //输入的起始地址和输出的数量
+ 469   1              start_address  = buf[2] << 8;
+ 470   1              start_address += buf[3];
+ 471   1              count  = buf[4] << 8;
+ 472   1              count += buf[5];
+ 473   1      
+ 474   1              
+ 475   1              
+ 476   1              if (count < 0x1 || count > 0x7B0) {
+ 477   2                      send_bad_msg(buf[0],buf[1],3);   
+ 478   2                      ret = 1;
+ 479   2          return ret;         
+ 480   2              }
+ 481   1              
+ 482   1              
+ 483   1              
+ 484   1              localbufLength = buf[6];
+ 485   1              for (index = 0; index < localbufLength; index++) {
+ 486   2          localbuf[index] = buf[7+index];             
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 9   
+
+ 487   2              }
+ 488   1              
+ 489   1              
+ 490   1                      crc = crc16(buf,6);
+ 491   1                      buf[6] = crc;
+ 492   1                      buf[7] = crc >> 8;
+ 493   1                      send_buffer(buf,8);                     
+ 494   1              return ret;
+ 495   1      }
+ 496          
+ 497          
+ 498          
+ 499          
+ 500          
+ 501          
+ 502          
+ 503          
+ 504          int function_WRITE_MULTIPLE_REGISTERS_10(unsigned char *buf)
+ 505          {
+ 506   1        int ret = 0;
+ 507   1              unsigned short crc = 0;
+ 508   1              unsigned short start_address = 0;  
+ 509   1              unsigned short count = 0;               
+ 510   1              unsigned char localbufLength = 0;
+ 511   1              unsigned char index = 0;
+ 512   1              
+ 513   1              
+ 514   1      
+ 515   1              start_address  = buf[2] << 8;
+ 516   1              start_address += buf[3];
+ 517   1              count  = buf[4] << 8;
+ 518   1              count += buf[5];
+ 519   1      
+ 520   1              
+ 521   1              
+ 522   1              if (count < 0x1 || count > 0x7B) {
+ 523   2                      send_bad_msg(buf[0],buf[1],3);  
+ 524   2                      ret = 1;
+ 525   2          return ret;         
+ 526   2              }
+ 527   1      
+ 528   1           //地址是否ok, 否则发送 异常码 2
+ 529   1          if(start_address!=41000) {send_bad_msg(buf[0],buf[1],2);   
+ 530   2                 ret = 1;
+ 531   2             return ret;
+ 532   2                }
+ 533   1              
+ 534   1                 
+ 535   1                 fenduan_num=buf[7]; 
+ 536   1                 fan_num=buf[8];         
+ 537   1                 hot_num=buf[9];         
+ 538   1                 temp_set=buf[10];   
+ 539   1                 fan_close_cnt=buf[11]; 
+ 540   1      
+ 541   1      
+ 542   1                      crc = crc16(buf,6);
+ 543   1                      buf[6] = crc;
+ 544   1                      buf[7] = crc >> 8;
+ 545   1                      send_buffer(buf,8);             
+ 546   1                              
+ 547   1                      save_all_bit=1;
+ 548   1                      ret = 2;
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 10  
+
+ 549   1              return ret;
+ 550   1      }
+ 551          
+ 552          
+ 553          
+ 554          
+ 555          
+ 556          
+ 557          
+ 558          
+ 559          int function_READ_WRITE_MULTIPLE_REGISTERS_17(unsigned char *buf)
+ 560          {
+ 561   1        int ret = 0;
+ 562   1              unsigned short crc = 0;
+ 563   1              unsigned short read_start_address = 0;  
+ 564   1              unsigned short write_start_address = 0;  
+ 565   1              unsigned short readCount = 0;           
+ 566   1              unsigned char writebytes = 0;
+ 567   1              unsigned short writeCount = 0;                  
+ 568   1              unsigned char localbufLength = 0;
+ 569   1              unsigned char index = 0;
+ 570   1              int send_total_count = 0;
+ 571   1              
+ 572   1              
+ 573   1              //输入的起始地址和输出的数量
+ 574   1              read_start_address  = buf[2] << 8;
+ 575   1              read_start_address += buf[3];
+ 576   1              readCount  = buf[4] << 8;
+ 577   1              readCount += buf[5];
+ 578   1              
+ 579   1              write_start_address  = buf[6] << 8;
+ 580   1              write_start_address += buf[7];
+ 581   1              writeCount  = buf[8] << 8;
+ 582   1              writeCount += buf[9];
+ 583   1              
+ 584   1              writebytes = buf[10];
+ 585   1               
+ 586   1              
+ 587   1              if (readCount < 0x1 || readCount > 0x7D) {
+ 588   2                      send_bad_msg(buf[0],buf[1],3);   
+ 589   2                      ret = 1;
+ 590   2          return ret;         
+ 591   2              }
+ 592   1              if (writeCount < 0x1 || writeCount > 0x79) {
+ 593   2                      send_bad_msg(buf[0],buf[1],3);  
+ 594   2                      ret = 1;
+ 595   2          return ret;         
+ 596   2              }
+ 597   1              
+ 598   1              
+ 599   1              
+ 600   1              localbufLength = writebytes;
+ 601   1              for (index = 0; index < localbufLength; index++) {
+ 602   2          localbuf[index] = buf[11+index];            
+ 603   2              }
+ 604   1              
+ 605   1              
+ 606   1                send_modbus_buf_count = 0;
+ 607   1                send_modbus_buffer[0] = buf[0];   
+ 608   1                send_modbus_buffer[1] = buf[1];   
+ 609   1                send_modbus_buffer[2] = readCount;  
+ 610   1                while (readCount--) {
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 11  
+
+ 611   2                    send_modbus_buffer[3+send_modbus_buf_count] = P0; 
+ 612   2                        send_modbus_buf_count++;
+ 613   2                        send_modbus_buffer[3+send_modbus_buf_count] = P0; 
+ 614   2                        send_modbus_buf_count++;
+ 615   2               }              
+ 616   1                send_modbus_buffer[2] = send_modbus_buf_count;        
+ 617   1                send_total_count = send_modbus_buf_count + 5;   
+ 618   1                crc = crc16(send_modbus_buffer,send_total_count-2);  
+ 619   1                send_modbus_buffer[send_total_count-2] = crc; 
+ 620   1                send_modbus_buffer[send_total_count-1] = crc >> 8;
+ 621   1                send_buffer(send_modbus_buffer,send_total_count);             
+ 622   1                      
+ 623   1              
+ 624   1              return ret;
+ 625   1      }
+ 626          
+ 627          
+ 628          
+ 629          
+ 630          int not_support_function_code(unsigned char address,unsigned char function)
+ 631          {
+ 632   1              int ret = 0;    
+ 633   1              send_bad_msg(address,function,1);
+ 634   1              
+ 635   1              return ret;
+ 636   1      }
+ 637          
+ 638          
+ 639          
+ 640          
+ 641          int parse_recv_buffer(unsigned char *buf,int len)
+ 642          {       
+ 643   1              int ret = 0;
+ 644   1              unsigned short temp_crc = 0;
+ 645   1              unsigned short temp_crc2 = 0;
+ 646   1              
+ 647   1              if (len < 4)     return 0;        
+ 648   1              if (buf == NULL) return 0;
+ 649   1                                                                 
+ 650   1              if (buf[0] != dev_address && buf[0] != dev_broadcast_address) {  
+ 651   2                      ret = 1;
+ 652   2                      return ret;
+ 653   2              }
+ 654   1              temp_crc  = buf[len-1] << 8;
+ 655   1              temp_crc += buf[len-2];
+ 656   1              temp_crc2 = crc16(buf,len-2);  
+ 657   1      
+ 658   1              if (temp_crc != temp_crc2) {  
+ 659   2                      
+ 660   2                      ret = 1;
+ 661   2                      return ret;
+ 662   2              }
+ 663   1              
+ 664   1              if (buf[0] == 0) {   
+ 665   2                      return broadcast_process(buf,len);
+ 666   2                 }
+ 667   1              
+ 668   1              
+ 669   1              switch (buf[1]) {
+ 670   2                      case FUNCTION_READ_COILS_1                 : ret = function_READ_COILS_1(buf); break;                             
+ 671   2                      case FUNCTION_READ_DISCREATE_INPUT_2       : ret = function_READ_DISCREATE_INPUT_2(buf);   break;       
+ 672   2                      case FUNCTION_READ_HOLDING_REGISTERS_3     : ret = function_READ_HOLDING_REGISTERS_3(buf); break;     
+C51 COMPILER V9.60.7.0   MODBUS                                                            11/08/2024 16:15:52 PAGE 12  
+
+ 673   2                      case FUNCTION_READ_INPUT_REGISTERS_4       : ret = function_READ_INPUT_REGISTERS_4(buf);   break;       
+ 674   2                      case FUNCTION_WRITE_SINGLE_COIL_5          : ret = function_WRITE_SINGLE_COIL_5(buf,len);      break;   
+             -       
+ 675   2                      case FUNCTION_WRITE_SINGLE_REGISTER_6      : ret = function_WRITE_SINGLE_REGISTER_6(buf,len);  break;   
+             -   
+ 676   2                      case FUNCTION_WRITE_MULTIPLE_COILS_F       : ret = function_WRITE_MULTIPLE_COILS_F(buf);    break;      
+             - 
+ 677   2                      case FUNCTION_WRITE_MULTIPLE_REGISTERS_10  : ret = function_WRITE_MULTIPLE_REGISTERS_10(buf); break;  
+ 678   2                      case FUNCTION_READ_WRITE_MULTIPLE_REGISTERS_17  : ret = function_READ_WRITE_MULTIPLE_REGISTERS_17(buf); 
+             -break;         
+ 679   2                      default: ret = not_support_function_code(buf[0],buf[1]);        
+ 680   2              }       
+ 681   1              
+ 682   1              return ret;
+ 683   1      }
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   4316    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =    579     126
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
