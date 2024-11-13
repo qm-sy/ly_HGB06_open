@@ -1,0 +1,4 @@
+".\output\STARTUP.obj",
+".\output\ÎÂ¿Ø³ÌÐò.obj" 
+TO ".\output\HGB06_E_test02_20241113" 
+PRINT(".\HGB06_E_test02_20241113.m51") RAMSIZE(256) 

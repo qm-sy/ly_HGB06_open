@@ -3,59 +3,7 @@
 <pre>
 <h1>礦ision3 Build Log</h1>
 <h2>Project:</h2>
-D:\程序文档\郭志阳-坚诺机电\温控程序-开环温控-modebus\温控程序.uv2
-Project File Date:  01/05/2023
+D:\程序文档\郭志阳-坚诺机电\温控程序-200hz\温控程序.uv2
+Project File Date:  06/14/2020
 
 <h2>Output:</h2>
-创建目标 '目标 1'
-编译 温控程序.C ...
-编译 modbus.c ...
-MODBUS.C(129): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(179): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(228): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(292): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(486): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(541): 警告 C280: 'len': unreferenced local variable
-MODBUS.C(602): 警告 C280: 'len': unreferenced local variable
-连接 ...
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?_UART_SEND_BYTE?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?SET_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?CUR_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?F_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?M_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?R_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?P1_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?P2_DIS?温縚程序
-Program Size: data=123.1 xdata=742 code=13175
-创建 HEX 文件 "温控程序" ...
-"温控程序" - 0 个错误, 15 个警告。
-创建目标 '目标 1'
-编译 温控程序.C ...
-连接 ...
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?_UART_SEND_BYTE?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?SET_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?CUR_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?F_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?M_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?R_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?P1_DIS?温縚程序
-*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
-    SEGMENT: ?PR?P2_DIS?温縚程序
-Program Size: data=129.1 xdata=736 code=13141
-创建 HEX 文件 "温控程序" ...
-"温控程序" - 0 个错误, 8 个警告。

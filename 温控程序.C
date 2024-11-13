@@ -1,12 +1,18 @@
 //  温制程序 	2020-6-9
 //CPU STC15W4K32S4	   11.0592Mhz
-			   
+
+//2022-12-17  增加了上电out1=out2=out3=1  ,在待机时每秒都会输出关闭信号	
+//2023-4-21   修改了 风扇输出频率，原2.7Khz  改为225hz
+//2024-4-10   修改了风扇风量值
+//对应坚诺名称：温控程序C-200hz-AC50Hz-120秒	   
+//对应坚诺名称：温控程序E-200hz-AC50Hz-15秒	  两个文件只是时间不同
+
+
 
 #include  "STC15W4Kxx.H"
 #include <stdlib.h>
-#include "modbus.h"
-#include "intrins.H"  
-#include <stdio.h> 
+#include "intrins.H"  //_nop_()
+#include <stdio.h> //sprintf 用此函数
 #include  <bin.c>
 #include "math.h"
 
@@ -15,13 +21,13 @@
 #define uint   unsigned int
 #define ulong  unsigned long
 
-#define B 3950.0
+#define B 3950.0//温度系数
 
-#define TN 298.15
+#define TN 298.15//额定温度(绝对温度加常温:273.15+25)
 
-#define RN 10
+#define RN 10// 额定阻值(绝对温度时的电阻值10k)
 
-#define BaseVol 5.04 
+#define BaseVol 5.04 //ADC基准电压
 
 
 
@@ -102,15 +108,15 @@
 
 #define  nop    _nop_()
 
-#define CYCLE   4096    
+#define CYCLE   4096     //定义PWM周期
 
 
 
-#define Kp 18      
-#define Ki 13     
-#define Kd 0.8    
+#define Kp 18      //比例系数 18
+#define Ki 13     //积分系数  13
+#define Kd 0.8    //微分系数 0.3
 
-#define time_max  1450  
+#define time_max  6400  //输出最高电压值
 
 
 #define   fd_key        2
@@ -126,16 +132,25 @@
 
 
 //************************************************************
-//485接收缓冲区
-unsigned char xdata g_recv_buffer[64];
-int xdata g_recv_buffer_index = 0;
-int xdata g_need_times = 10;            
-int xdata g_current_need_times = 0;     
-volatile unsigned char idata g_need_process_datas = 0;   
+   /*
+   float idata Rt;
+   float idata Rp;
+   float idata T2;
+   float idata Bx;
+   float idata Ka;
+   float idata vol;	 */
 
-//**************************************************************  
+ uchar  idata  keybuf;
 
- 
+ uchar  idata  ribuf1[20];   //串口1接收数组
+
+
+ uchar  idata  buff[20];
+ uchar  idata  ri_cnt;
+ uchar  idata  jj;
+ uchar  idata  nn[3];
+
+ uchar idata   uu[2];
 
  uchar idata   key_buf;
 	   
@@ -151,10 +166,10 @@ volatile unsigned char idata g_need_process_datas = 0;
 
  uchar  idata  fan_close_cnt;
 
- uint  idata  ss_cnt;
+ uchar idata  ss_cnt;
 
  uchar idata  temp_set_cnt;
- uint  idata  save_cnt;
+ uchar idata  save_cnt;
  
  uint  idata  temp[7];
 
@@ -171,7 +186,7 @@ volatile unsigned char idata g_need_process_datas = 0;
 
  uchar idata  power_cnt;
 
- uchar  idata  mode_wr[5]; 	
+ uchar  idata  mode_wr[5]; 	//存储每个模式中的5个参数
  
 
 
@@ -196,9 +211,11 @@ volatile unsigned char idata g_need_process_datas = 0;
 
  uchar idata out_clear_cnt;
  
- uchar idata power_run; //运行标志
-
- unsigned char idata dev_address;
+bit preheating_scan_bit = 0;  
+bit preheating_strat_bit = 0;  
+ unsigned long preheating_scan_cnt = 0;
+ unsigned long preheating_strat_cnt = 0;
+turn_bit = 0;      
 
 	 
  unsigned long idata PeriodCnt = 0; //PWM 周期计数值
@@ -208,8 +225,8 @@ volatile unsigned char idata g_need_process_datas = 0;
  uchar  idata  LowRL = 0; //低电平重载值的低字节
 
 
- uchar   xdata   ID_old[7];	
- uchar   xdata   ID_new[7];  
+ uchar   xdata   ID_old[7];	//芯片ID数据
+ uchar   xdata   ID_new[7]; //加密ID后的数据 
  uchar   code    *cptr;
 
  unsigned char code Tab[]={
@@ -243,9 +260,6 @@ sbit out3=P2^2;
 
 sbit out1=P1^7;
 
-sbit T4=P1^3;
-sbit T5=P1^4;
-
 
 
 sbit speak=P5^4;
@@ -278,14 +292,11 @@ bit fan_bit;
 bit fan_bit2;
 bit fan_bit3;
 
-bit tb_num_bit;
-bit save_all_bit;
-bit mode_num_bit;
-bit hot_power_bit;
-bit power_on_bit;	//通讯命令-打开电源
-bit power_on_bit2;
-
- 
+ /*
+bit pwm2_bit;
+bit pwm3_bit;
+bit pwm4_bit;
+bit pwm5_bit; */
 
 bit  PWMOUT;
 
@@ -422,7 +433,6 @@ uint code temp_table[]={
 965 	,//118
 966 	,//119
 967 	//120
-
 };
 	 
 //_________________________________________________________________________
@@ -636,7 +646,7 @@ int PID(int Set_value,int Real_value) //标准PID温度控制算法
 
 void UartInit(void)		//9600bps@11.0592MHz
 {
-SCON = 0x50;		//8位数据,可变波特率 串口1
+	SCON = 0x50;		//8位数据,可变波特率 串口1
 
 	//S3CON = 0x10;		//8位数据,可变波特率
 	//S3CON &= 0xBF;		//串口3选择定时器2为波特率发生器
@@ -651,10 +661,11 @@ SCON = 0x50;		//8位数据,可变波特率 串口1
 	AUXR |= 0x10;		//启动定时器2
 	RI=0;
 	TI=0;
-    ES=1;
+
 	//S3CON &= ~S3RI;
 	//S4CON &= ~S4RI;
 	//IE2 = 0x08;	  //打开串口3中断
+	//ES=1;
 }
 		  
 
@@ -684,16 +695,16 @@ void Timer1Init(void)
 
 
 
-
-
-void Timer3Init(void)		//5毫秒@11.0592MHz
+void Timer3Init(void)		//50毫秒@11.0592MHz
 {
-	T4T3M |= 0x02;		//定时器时钟1T模式
-	T3L = 0x00;		//设置定时初始值
-	T3H = 0x28;		//设置定时初始值
+	T4T3M &= 0xFD;		//定时器时钟12T模式
+	T3L = 0x00;		//设置定时初值
+	T3H = 0x4C;		//设置定时初值
 	T4T3M |= 0x08;		//定时器3开始计时
 	IE2 |= 0x20;       //开定时器3中断
 }
+
+
 
 
 
@@ -763,13 +774,13 @@ void IapEraseSector(uint addr)
 
 //******************************************************************
 	
-void save_mode_num(void)  
+void save_mode_num(void)   //保存模式数值
 {
  uint addr;
  
  addr=0x0000;
  EA=0;
- IapEraseSector(addr);    
+ IapEraseSector(addr);    //扇区擦除
 
  IapProgramByte(addr,mode_num); 
  
@@ -784,7 +795,7 @@ void fan_close_save(void)
  
  addr=0x1000;
  EA=0;
- IapEraseSector(addr);    
+ IapEraseSector(addr);    //扇区擦除
 
  IapProgramByte(addr,fan_close_cnt); 
  
@@ -802,23 +813,23 @@ void fan_close_read(void)
  EA=0;
  fan_close_cnt=IapReadByte(addr);
  EA=1;
-																	
- if((fan_close_cnt<10)||(fan_close_cnt>250))	  fan_close_cnt=120;	
+																	 //出厂时间120秒和15秒两种
+ if((fan_close_cnt<1)||(fan_close_cnt>250))	  fan_close_cnt=15;	 //延时关闭风机时间
 }
 
 
 
 //**********************************************************
-void  read_mode_wr_data(void) 
+void  read_mode_wr_data(void) //读取每个模式中的参数
 {
- fenduan_num=mode_wr[0]; 
- tb_num=mode_wr[1];	    
- fan_num=mode_wr[2];	
- hot_num=mode_wr[3];	
- temp_set=mode_wr[4];	
+ fenduan_num=mode_wr[0]; //分段
+ tb_num=mode_wr[1];	    //同步
+ fan_num=mode_wr[2];	//风力
+ hot_num=mode_wr[3];	//同步
+ temp_set=mode_wr[4];	//温度
 
  if((fenduan_num==0)||(fenduan_num>7))  fenduan_num=1;
- if(tb_num>1)       tb_num=0; 
+ if(tb_num>1)       tb_num=0; //同步只有0和1，0没有同步，1为同步
  if(fan_num>6)      fan_num=0;
  if(hot_num>100)    hot_num=50;
  if(temp_set>220)  	temp_set=80;
@@ -831,17 +842,17 @@ void  save_mode_wr(void)
  uchar n;
  uint addr;
 
- mode_wr[0]=fenduan_num; 
- mode_wr[1]=tb_num;	     
- mode_wr[2]=fan_num;	
- mode_wr[3]=hot_num;	
- mode_wr[4]=temp_set;
+ mode_wr[0]=fenduan_num; //分段
+ mode_wr[1]=tb_num;	     //同步
+ mode_wr[2]=fan_num;	//风力
+ mode_wr[3]=hot_num;	//同步
+ mode_wr[4]=temp_set;	//温度
 
  if(mode_num==1) 
    {
     addr=0x0200;
 	EA=0;
-	IapEraseSector(addr);    
+	IapEraseSector(addr);    //扇区擦除
     for(n=0;n<5;n++) {IapProgramByte(addr,mode_wr[n]);	addr++;}
 	EA=1;
    }
@@ -850,7 +861,7 @@ void  save_mode_wr(void)
    {
     addr=0x0400;
 	EA=0;
-	IapEraseSector(addr);    
+	IapEraseSector(addr);    //扇区擦除
     for(n=0;n<5;n++) {IapProgramByte(addr,mode_wr[n]);	addr++;}
 	EA=1;
    }
@@ -859,7 +870,7 @@ void  save_mode_wr(void)
    {
     addr=0x0600;
 	EA=0;
-	IapEraseSector(addr);    
+	IapEraseSector(addr);    //扇区擦除
     for(n=0;n<5;n++) {IapProgramByte(addr,mode_wr[n]);	addr++;}
 	EA=1;
    }
@@ -868,7 +879,7 @@ void  save_mode_wr(void)
    {
     addr=0x0800;
 	EA=0;
-	IapEraseSector(addr);    
+	IapEraseSector(addr);    //扇区擦除
     for(n=0;n<5;n++) {IapProgramByte(addr,mode_wr[n]);	addr++;}
 	EA=1;
    }
@@ -877,7 +888,7 @@ void  save_mode_wr(void)
    {
     addr=0x0a00;
 	EA=0;
-	IapEraseSector(addr);    
+	IapEraseSector(addr);    //扇区擦除
     for(n=0;n<5;n++) {IapProgramByte(addr,mode_wr[n]);	addr++;}
 	EA=1;
    }
@@ -944,7 +955,7 @@ void read_data(void)
    	EA=1;
    }
 
- read_mode_wr_data();  
+ read_mode_wr_data();  //加载模式对应的参数
  
 
 
@@ -962,8 +973,8 @@ void read_data(void)
 
 void InitADC(void)
 {
-    P1ASF = B0010_0111;                   
-    ADC_RES = 0;                    
+    P1ASF = B0011_1111;                   //设置P1.0~P1.5口为AD口
+    ADC_RES = 0;                    //清除结果寄存器
     ADC_RESL=0;
     ADC_CONTR = ADC_POWER | ADC_SPEEDL;
    
@@ -973,19 +984,19 @@ void InitADC(void)
 //----------------------------
 //读取ADC结果
 //----------------------------
-uint GetADCResult(uchar ch)      
+uint GetADCResult(uchar ch)      //ch为输入模拟量通道号0~7
 {
  uint dd=0;
 
     ADC_CONTR = ADC_POWER | ADC_SPEEDL | ch | ADC_START;
-    _nop_();                      
+    _nop_();                        //等待4个NOP
     _nop_();
     _nop_();
     _nop_();
-    while (!(ADC_CONTR & ADC_FLAG));
-    ADC_CONTR &= ~ADC_FLAG;         
+    while (!(ADC_CONTR & ADC_FLAG));//等待ADC转换完成
+    ADC_CONTR &= ~ADC_FLAG;         //Close ADC
 
-    dd= ADC_RES;                 
+    dd= ADC_RES;                 //返回ADC结果
     dd=dd<<2;
     dd=dd|ADC_RESL;
 	return dd;
@@ -999,11 +1010,11 @@ uint Temperature_LPF(uchar ch)
  uchar i,j,k;
  for(i=0;i<=6;i++)
   {
-    temp[i]= GetADCResult(ch); 
+    temp[i]= GetADCResult(ch); //采集7个数据.
     Delay1ms(5);
   }
  for(j=0;j<=6;j++)
-  {                      
+  {                      //按从小到大排序
     for(k=j;k<=6;k++)
 	 {
        if(temp[j]>=temp[k])
@@ -1015,8 +1026,8 @@ uint Temperature_LPF(uchar ch)
       }
    }
  temp[0]=temp[6]=0;
-
-return (temp[1]+temp[2]+temp[3]+temp[4]+temp[5])/5; 
+//去掉最大最小值
+return (temp[1]+temp[2]+temp[3]+temp[4]+temp[5])/5; //求平均值
 
 }
 
@@ -1069,7 +1080,24 @@ void UART_Send_Byte(unsigned char mydata)
  - 返回说明：无
  **************************************************************************/
  
+void UART_Send_Str(uchar *s)
+{				 
+ uchar i=0;
+ while(s[i]!=0)
+ {
+    
+ 	UART_Send_Byte(s[i]);
+ 	i++;
+ }
 
+ UART_Send_Byte(0xFF);
+ UART_Send_Byte(0xFF);
+ UART_Send_Byte(0xFF);
+
+// for(i=0;i<20;i++) buff[i]=0;
+ 
+ 
+}
 
 
 //*********************************************************************
@@ -1137,18 +1165,18 @@ void TM1722_Write_Word(uchar num_addr,uchar num)
  
 
 
-  TM1722_STB=1;           
+  TM1722_STB=1;            //端口配置初始化
   TM1722_CLK=1;
   TM1722_DIO=1;
-  TM1722_Write_Byte(0x00); 
+  TM1722_Write_Byte(0x00); //工作模式
   TM1722_STB=1;
-  TM1722_Write_Byte(0x44);   
+  TM1722_Write_Byte(0x44);   //固定地址模式
   TM1722_STB=1;
 
   if(num_addr!=1) goto  next_num1;
    
-  TM1722_Write_Byte(addr1);
-  TM1722_Write_Byte(temp1);     
+  TM1722_Write_Byte(addr1);//显示寄存器的00H单元开始
+  TM1722_Write_Byte(temp1);     //给显示寄存器送数据，
   TM1722_STB=1;	 
 
   next_num1: nop;
@@ -1157,13 +1185,13 @@ void TM1722_Write_Word(uchar num_addr,uchar num)
   TM1722_Write_Byte(temp2);     //给显示寄存器送数据，
   TM1722_STB=1;
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
   
 }   
  
 
-void fan_dis(uchar num)   
+void fan_dis(uchar num)   //风量条显示
 {
   if(num==0)       {lcd_0fh=lcd_0fh&B0011_0000;  lcd_0fh=lcd_0fh|B0000_0000; }
   else if(num==1)  {lcd_0fh=lcd_0fh&B0011_0000;  lcd_0fh=lcd_0fh|B0100_0000; }
@@ -1199,7 +1227,7 @@ void fan_dis(uchar num)
 
 
 
-void lcd_clear(uchar dat)  
+void lcd_clear(uchar dat)  //清显示缓存
 {
 
   lcd_03h=dat;
@@ -1248,14 +1276,14 @@ void lcd_clear(uchar dat)
   TM1722_Write_Byte(lcd_0fh);     //给显示寄存器送数据，
   TM1722_STB=1;
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 
 }
 
 
 
-void  dis1(bit sss,uint ss)    
+void  dis1(bit sss,uint ss)  //sss=0,不显示   sss=1 显示出来  
 {
  uchar a1,a2,a3;
  if(sss)
@@ -1287,7 +1315,7 @@ void  dis1(bit sss,uint ss)
 
 
 
-void temp_dis(bit on_off) 
+void temp_dis(bit on_off) //1--显示，0--不显示	 点亮 S10 
 {
   if(on_off) {lcd_03h=lcd_03h|B0100_0000; 	}
   else 		 {lcd_03h=lcd_03h&B1011_1111; 	}
@@ -1305,13 +1333,13 @@ void temp_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
-void hot_dis(bit on_off) 
+void hot_dis(bit on_off) //1--显示，0--不显示	 点亮S1
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0000_1000; 	}
   else 		 {lcd_0eh=lcd_0eh&B1111_0111; 	}
@@ -1329,13 +1357,13 @@ void hot_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
-void hot1_dis(bit on_off) 
+void hot1_dis(bit on_off) //1--显示，0--不显示	 点亮S2
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0000_0100; 	}
   else 		 {lcd_0eh=lcd_0eh&B1111_1011; 	}
@@ -1353,7 +1381,7 @@ void hot1_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1361,7 +1389,7 @@ void hot1_dis(bit on_off)
 
 
 
-void hot2_dis(bit on_off) 
+void hot2_dis(bit on_off) //1--显示，0--不显示	 点亮S3
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0000_0010; 	}
   else 		 {lcd_0eh=lcd_0eh&B1111_1101; 	}
@@ -1386,7 +1414,7 @@ void hot2_dis(bit on_off)
 
 
 
-void hot3_dis(bit on_off) 
+void hot3_dis(bit on_off) //1--显示，0--不显示	 点亮S4
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0000_0001; 	}
   else 		 {lcd_0eh=lcd_0eh&B1111_1110; 	}
@@ -1404,7 +1432,7 @@ void hot3_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1412,7 +1440,7 @@ void hot3_dis(bit on_off)
 
 
 
-void H1_dis(bit on_off) 
+void H1_dis(bit on_off) //1--显示，0--不显示	 点亮 数字1  H1
 {
   if(on_off) {lcd_0bh=lcd_0bh|B0100_0000; 	}
   else 		 {lcd_0bh=lcd_0bh&B1011_1111; 	}
@@ -1430,7 +1458,7 @@ void H1_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1453,7 +1481,7 @@ void H2_dis(bit on_off) //1--显示，0--不显示	 点亮 数字2  H2
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1461,7 +1489,7 @@ void H2_dis(bit on_off) //1--显示，0--不显示	 点亮 数字2  H2
 
 
 
-void H3_dis(bit on_off) 
+void H3_dis(bit on_off) //1--显示，0--不显示	 点亮 数字3  H3
 {
   if(on_off) {lcd_0bh=lcd_0bh|B0001_0000; 	}
   else 		 {lcd_0bh=lcd_0bh&B1110_1111; 	}
@@ -1479,13 +1507,13 @@ void H3_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
-void tb_dis(bit on_off) 
+void tb_dis(bit on_off) //1--显示，0--不显示	 点亮 S5  同步标志
 {
   if(on_off) {lcd_03h=lcd_03h|B0001_0000; 	}
   else 		 {lcd_03h=lcd_03h&B1110_1111; 	}
@@ -1503,7 +1531,7 @@ void tb_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1513,7 +1541,7 @@ void tb_dis(bit on_off)
 
 
 
-void jg_dis(bit on_off) 
+void jg_dis(bit on_off) //1--显示，0--不显示	 点亮 S6  警告标志
 {
   if(on_off) {lcd_03h=lcd_03h|B0010_0000; 	}
   else 		 {lcd_03h=lcd_03h&B1101_1111; 	}
@@ -1531,7 +1559,7 @@ void jg_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1540,7 +1568,7 @@ void jg_dis(bit on_off)
 
 
 
-void mode_dis(bit on_off) 
+void mode_dis(bit on_off) //1--显示，0--不显示	 点亮 S11  Mode
 {
   if(on_off) {lcd_03h=lcd_03h|B1000_0000; 	}
   else 		 {lcd_03h=lcd_03h&B0111_1111; 	}
@@ -1558,7 +1586,7 @@ void mode_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1569,7 +1597,7 @@ void mode_dis(bit on_off)
 
 
 
-void bf_dis(bit on_off) 
+void bf_dis(bit on_off) //1--显示，0--不显示	 点亮 S12  % 标志
 {
   if(on_off) {lcd_06h=lcd_06h|B0000_1000; 	}
   else 		 {lcd_06h=lcd_06h&B1111_0111; 	}
@@ -1587,7 +1615,7 @@ void bf_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1595,7 +1623,7 @@ void bf_dis(bit on_off)
 
 
 
-void set_dis(bit on_off) 
+void set_dis(bit on_off) //1--显示，0--不显示	 点亮 H4  Set 标志
 {
   if(on_off) {lcd_03h=lcd_03h|B0000_0100; 	}
   else 		 {lcd_03h=lcd_03h&B1111_1011; 	}
@@ -1613,18 +1641,18 @@ void set_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
-void cur_dis(bit on_off) 
+void cur_dis(bit on_off) //1--显示，0--不显示	 点亮 H5  Cur 标志
 {
   if(on_off) {lcd_03h=lcd_03h|B0000_1000; 	}
   else 		 {lcd_03h=lcd_03h&B1111_0111; 	}
 
-  TM1722_STB=1;           
+  TM1722_STB=1;            //端口配置初始化
   TM1722_CLK=1;
   TM1722_DIO=1;
   TM1722_Write_Byte(0x00); //工作模式
@@ -1637,14 +1665,14 @@ void cur_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void f_dis(bit on_off) 
+void f_dis(bit on_off) //1--显示，0--不显示	 点亮S7
 {
   if(on_off) {lcd_0eh=lcd_0eh|B1000_0000; 	}
   else 		 {lcd_0eh=lcd_0eh&B0111_1111; 	}
@@ -1662,7 +1690,7 @@ void f_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1670,7 +1698,7 @@ void f_dis(bit on_off)
 
 
 
-void m_dis(bit on_off) 
+void m_dis(bit on_off) //1--显示，0--不显示	 点亮S8
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0100_0000; 	}
   else 		 {lcd_0eh=lcd_0eh&B1011_1111; 	}
@@ -1688,14 +1716,14 @@ void m_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void r_dis(bit on_off) 
+void r_dis(bit on_off) //1--显示，0--不显示	 点亮S9
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0010_0000; 	}
   else 		 {lcd_0eh=lcd_0eh&B1101_1111; 	}
@@ -1713,14 +1741,14 @@ void r_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void p1_dis(bit on_off) 
+void p1_dis(bit on_off) //1--显示，0--不显示	 点亮P1
 {
   if(on_off) {lcd_0ah=lcd_0ah|B0000_1000; 	}
   else 		 {lcd_0ah=lcd_0ah&B1111_0111; 	}
@@ -1738,14 +1766,14 @@ void p1_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void p2_dis(bit on_off) 
+void p2_dis(bit on_off) //1--显示，0--不显示	 点亮 P2
 {
   if(on_off) {lcd_07h=lcd_07h|B0000_1000; 	}
   else 		 {lcd_07h=lcd_07h&B1111_0111; 	}
@@ -1763,14 +1791,14 @@ void p2_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void s13_dis(bit on_off) 
+void s13_dis(bit on_off) //1--显示，0--不显示	 点亮S13
 {
   if(on_off) {lcd_0eh=lcd_0eh|B0001_0000; 	}
   else 		 {lcd_0eh=lcd_0eh&B1110_1111; 	}
@@ -1788,14 +1816,14 @@ void s13_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
 
 
-void s14_dis(bit on_off) 
+void s14_dis(bit on_off) //1--显示，0--不显示	 点亮S14  旋转叶
 {
   if(on_off) {lcd_0fh=lcd_0fh|B0001_0000; 	}
   else 		 {lcd_0fh=lcd_0fh&B1110_1111; 	}
@@ -1813,12 +1841,12 @@ void s14_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
 
-void s15_dis(bit on_off) 
+void s15_dis(bit on_off) //1--显示，0--不显示	 点亮S14  旋转叶中心点
 {
   if(on_off) {lcd_0fh=lcd_0fh|B0010_0000; 	}
   else 		 {lcd_0fh=lcd_0fh&B1101_1111; 	}
@@ -1836,7 +1864,7 @@ void s15_dis(bit on_off)
   TM1722_STB=1;
 
 
-  TM1722_Write_Byte(0x93); 
+  TM1722_Write_Byte(0x93); //显示开
   TM1722_STB=1;
 }
 
@@ -1849,13 +1877,13 @@ void hot_select(uchar dd)
 {
  switch(dd)
   {
-   case 1: {hot1_dis(1); hot2_dis(0); hot3_dis(0); H1_dis(1);  H2_dis(0); H3_dis(0); }break;	
-   case 2: {hot1_dis(1); hot2_dis(1); hot3_dis(0); H1_dis(1);  H2_dis(1); H3_dis(0); }break;	
-   case 3: {hot1_dis(1); hot2_dis(1); hot3_dis(1); H1_dis(1);  H2_dis(1); H3_dis(1); }break;	
-   case 4: {hot1_dis(1); hot2_dis(0); hot3_dis(1); H1_dis(1);  H2_dis(0); H3_dis(1); }break;	
-   case 5: {hot1_dis(0); hot2_dis(1); hot3_dis(1); H1_dis(0);  H2_dis(1); H3_dis(1); }break;	
-   case 6: {hot1_dis(0); hot2_dis(1); hot3_dis(0); H1_dis(0);  H2_dis(1); H3_dis(0); }break;	
-   case 7: {hot1_dis(0); hot2_dis(0); hot3_dis(1); H1_dis(0);  H2_dis(0); H3_dis(1); }break;
+   case 1: {hot1_dis(1); hot2_dis(0); hot3_dis(0); H1_dis(1);  H2_dis(0); H3_dis(0); }break;	// 加热管1
+   case 2: {hot1_dis(1); hot2_dis(1); hot3_dis(0); H1_dis(1);  H2_dis(1); H3_dis(0); }break;	// 加热管1+2
+   case 3: {hot1_dis(1); hot2_dis(1); hot3_dis(1); H1_dis(1);  H2_dis(1); H3_dis(1); }break;	// 加热管1+2+3
+   case 4: {hot1_dis(1); hot2_dis(0); hot3_dis(1); H1_dis(1);  H2_dis(0); H3_dis(1); }break;	// 加热管1+3
+   case 5: {hot1_dis(0); hot2_dis(1); hot3_dis(1); H1_dis(0);  H2_dis(1); H3_dis(1); }break;	// 加热管2+3
+   case 6: {hot1_dis(0); hot2_dis(1); hot3_dis(0); H1_dis(0);  H2_dis(1); H3_dis(0); }break;	// 加热管2
+   case 7: {hot1_dis(0); hot2_dis(0); hot3_dis(1); H1_dis(0);  H2_dis(0); H3_dis(1); }break;	// 加热管3
   }
 
 
@@ -1870,7 +1898,7 @@ void  mode_chose(void)
 {
  read_data();
 
- lcd_clear(0x00);  
+ lcd_clear(0x00);  //清屏
 
 
  dis1(1,mode_num); mode_dis(1);  Delay1ms(1000);  mode_dis(0);
@@ -1897,8 +1925,8 @@ void  mode_chose(void)
 void  pwm_set(uint pwmdata)
 {
  
- P_SW2 |= 0x80;      
- PWM5T2 = pwmdata; 
+ P_SW2 |= 0x80;      //使能访问XSFR
+ PWM5T2 = pwmdata; //设置PWM4第2次反转的PWM计数
                                                
  P_SW2 &= ~0x80;
 
@@ -1909,8 +1937,8 @@ void  pwm_set(uint pwmdata)
 
 void fan_run(void)
 {
- P_SW2 |= 0x80;    
- PWMCR =0x88;      
+ P_SW2 |= 0x80;    //使能访问XSFR
+ PWMCR =0x88;      //打开PWM运行
  P_SW2 &= ~0x80;
 
 }
@@ -1922,8 +1950,8 @@ void fan_run(void)
 void fan_stop(void)
 {
  pwm_set(10);
- P_SW2 |= 0x80;    
- PWMCR =0x00;     
+ P_SW2 |= 0x80;    //使能访问XSFR
+ PWMCR =0x00;     //关闭PWM
  P_SW2 &= ~0x80;
  pwm5=10;
 
@@ -1933,23 +1961,23 @@ void fan_stop(void)
 
 
 
-void fan_run_stop(uchar dd)	 
+void fan_run_stop(uchar dd)	 //风量风扇启动或停止
 {
  switch(dd)
   {
    case 0: { fan_stop();  fan_bit=0; }break;
 
-   case 1: { fan_run(); pwm5=2000; pwm_set(pwm5); fan_bit=1;}break;
+   case 1: { fan_run(); pwm5=2000; pwm_set(pwm5); fan_bit=1;}break;	 //500
 
-   case 2: { fan_run(); pwm5=2400; pwm_set(pwm5); fan_bit=1;}break;
+   case 2: { fan_run(); pwm5=2400; pwm_set(pwm5); fan_bit=1;}break;	 //1000
 
-   case 3: { fan_run(); pwm5=2800; pwm_set(pwm5); fan_bit=1;}break;
+   case 3: { fan_run(); pwm5=2800; pwm_set(pwm5); fan_bit=1;}break;	 //1500
 
-   case 4: { fan_run(); pwm5=3200; pwm_set(pwm5); fan_bit=1;}break;
+   case 4: { fan_run(); pwm5=3200; pwm_set(pwm5); fan_bit=1;}break;	//2200
 
-   case 5: { fan_run(); pwm5=3600; pwm_set(pwm5); fan_bit=1;}break;
+   case 5: { fan_run(); pwm5=3600; pwm_set(pwm5); fan_bit=1;}break;	 //3200
 
-   case 6: { fan_run(); pwm5=4000; pwm_set(pwm5); fan_bit=1;}break;
+   case 6: { fan_run(); pwm5=4000; pwm_set(pwm5); fan_bit=1;}break;	 //4000
 
   }
 
@@ -1958,43 +1986,55 @@ void fan_run_stop(uchar dd)
 //***********************************************************************
 
  
-void send_buffer(unsigned char *buf,int len)
-{	
-	while (len--) {
-		TI=0;     
-		SBUF = *buf++;
-		while (TI == 0);
-		TI=0;
-	}
-}
 
 
 
 
 
-void Uart() interrupt 4   	
+
+void Uart() interrupt 4 using 1
 {
- if (RI) {
-		  RI=0;                         
-    if (g_need_process_datas) return;              
-		if (g_recv_buffer_index >= 64) g_recv_buffer_index = 0;  
-		g_recv_buffer[g_recv_buffer_index++] = SBUF;   
-		g_current_need_times = g_need_times;           			
-	}
  
+ if(RI)
+  {
+   RI=0;
+			
+   ribuf1[ri_cnt] = SBUF;
+   
+   if(SBUF==0xff) 
+     {
+	     nn[jj]=ri_cnt;
+		 
+
+	     if(jj==1)       { if(nn[1]-nn[0]==1) jj++; else { nn[0]=nn[1]; jj=1;}}
+         else if(jj==2)  { if(nn[2]-nn[1]==1) jj++; else { nn[0]=nn[2]; jj=1;}}
+		 else jj++;					         
+
+        if(jj>2) //检测到连续发过来的0xff
+          {
+		    ES=0;
+	        jj=0;  
+			ri_cnt=0;
+	        uart_ok=1;
+		  }
+  
+	  }
+    ri_cnt++; if(ri_cnt>20) {ri_cnt=0;	jj=0;}
+   }
 }
+
 //****************************************************************************************
 
 //***********************************************************************
 void time_inset(void)
 {
- tt1=time*5+57979;	 
+ tt1=time+58400;	 //time=0时，  50Hz(59979) 最低8.2ms	 60Hz(60885) 最低6ms     58163(10ms )
  tt2=65000;
 }
 
 
 
-void exint0()  interrupt 0 using 1        
+void exint0()  interrupt 0 using 1        //(location at 0003H)   外部中断INT0
 {					   
  out1=out2=out3=1;	
  TL0 = tt1;		//设置定时初值
@@ -2003,11 +2043,14 @@ void exint0()  interrupt 0 using 1
  TF0=0;
  ET0=1;
  TR0=1;	 
+ 
+  
+
 }
 
 
 
-void tm0_isr() interrupt 1  using 2
+void tm0_isr() interrupt 1  using 2	
 {
  if(zb_bit==0) {
    				switch(fenduan_num)
@@ -2043,30 +2086,43 @@ void tm0_isr() interrupt 1  using 2
 
 
 //******************************************************************************************
+/* T0 中断服务函数，产生 PWM 输出 */
+/*
+void InterruptTimer0() interrupt 1 using 2{
+    if (PWMOUT == 1){ //当前输出为高电平时，装载低电平值并输出低电平
+        TH0 = LowRH;
+        TL0 = LowRL;
+        PWMOUT = 0;
+		led6=out2=1;
+		//out2=out3=1;
+    }else{ //当前输出为低电平时，装载高电平值并输出高电平
+        TH0 = HighRH;
+        TL0 = HighRL;
+        PWMOUT = 1;
+		led6=0;
+		out2=0;
+		//out2=out3=0;
+    }
+}
+
+ */
 
 
 
 
 
-
-void t3int() interrupt 19  using 3	  //5ms  定时器3  11.0592
+void t3int() interrupt 19  using 3	  //50ms  定时器3  11.0592
 {
 
-    if (g_recv_buffer_index > 0 && g_need_process_datas == 0) 
-	  {
-        if (g_current_need_times-- == 0) {     
-			g_need_process_datas = 1;         		
-		   }		
-      }
-  
+ key_buf=P0&0x0f; //每50ms 扫描一次按键
+
+ //if(key_buf==0x0f)  key_find_bit=0;
 
 
- key_buf=P0&0x0f; 
-
- if(fan_close_bit) 
+ if(fan_close_bit) //同步信号关，风机延时关闭
    {
 	cnt4++;
-	if(cnt4>199) 
+	if(cnt4>19) //1秒钟到	 1200 为1分钟
 	  {
 	    cnt4=0; 
 		cnt5++;   
@@ -2076,91 +2132,124 @@ void t3int() interrupt 19  using 3	  //5ms  定时器3  11.0592
 	
    }
 
- dis_temp_cnt++; 
- if(dis_temp_cnt>100) {dis_temp_cnt=0; dis_temp_bit=1;}
+ dis_temp_cnt++; //温度检测0.5秒检测一次
+ if(dis_temp_cnt>10) {dis_temp_cnt=0; dis_temp_bit=1;}
 
- 
- if(fan_bit)  
+
+ if(fan_bit)  //风扇图标旋转
    {
 	fan_cnt++;
-	if(fan_cnt>20)  { fan_cnt=0; fan_bit2=1; fan_bit3=~fan_bit3; }
-   }  
+	if(fan_cnt>2)  { fan_cnt=0; fan_bit2=1; fan_bit3=~fan_bit3; }
+   }
 
 
  if(sp_bit==0)
   {
    cnt3++;
-   if(cnt3>20) {cnt3=0; speak=sp_bit=1;}
+   if(cnt3>2) {cnt3=0; speak=sp_bit=1;}
   
   } 
 
 
 
 
-  
-if(power_bit==0) 
+
+if(power_bit==0) //待机电源按键指示闪烁
   {
    
-   if(power_cnt>90) { led5=~led5; power_cnt=0; }
+   if(power_cnt>9) { led5=~led5; power_cnt=0; }
    else power_cnt++;
 
-  }	 
+  }
 
 
 
 
 
-if(temp_set_bit)  
+if(temp_set_bit)  //温度设定时数字闪烁
  {
   save_cnt++;
-  if(save_cnt>400) {save_cnt=0;  save_bit=1; } 
+  if(save_cnt>40) {save_cnt=0;  save_bit=1; } //2秒后保存修改值
 
 
-  if(temp_set_cnt>90) {temp_set_cnt=0;   ss_bit=~ss_bit;}
+  if(temp_set_cnt>9) {temp_set_cnt=0;   ss_bit=~ss_bit;}
   else temp_set_cnt++;
 
  }
 
 else {
 	  ss_cnt++;
-	  if(ss_cnt>600) { ss_cnt=0; hot_HT_bit=1;}
-
-
+	  if(ss_cnt>60) { ss_cnt=0; hot_HT_bit=1;}
       }
 
-	 
+      
+    if(preheating_scan_bit == 1)
+    {
+        preheating_scan_cnt++;
+        if(preheating_scan_cnt == 200)  //10s
+        {
+            preheating_strat_bit = 1;
+            preheating_scan_bit = 0;
+            preheating_scan_cnt = 0;
+        }
+    }
+    if(preheating_strat_bit == 1)
+    {
+        preheating_strat_cnt++;
+        if(preheating_strat_cnt == 200)  //10s
+        {
+            preheating_strat_bit = 0;
+            preheating_strat_cnt = 0;
+        } 
+    }
+
 
 }
 
 
 
-//******************************************************************************************************
+//******************************************************************************************************                                                                                                                                                                                                                                                                                                                                                                                                               
+
+
 
 void main(void)
-{ 
+{ /*
+   tm1=PID(120,29);
+	 
+   tm1=PID(120,60);
+  
+   tm1=PID(120,80);
+  
+   tm1=PID(120,110);
+   
+   tm1=PID(120,118); 
+  
+   tm1=PID(120,119); 
+
+   tm1=PID(120,121); */
 
    hot_ok=0;
    hot_fan=0;
    lcd_bl=1;
    power_bit=1;
 
-    P0M0 =B0110_0000;  
+    P0M0 =B0110_0000;  ////P0.5 P0.6 设置成推勉输出
     P0M1 = 0x00;
 	
 		 
 
-    P1M0 = B1100_0000;  
-    P1M1 = B0001_1000;
+    P1M0 = B1100_0000;  //P1.6, P1.7设置成推勉输出
+    P1M1 = 0x00;
 
 
-    P2M0 = B1000_1110; 
+    P2M0 = B1000_1110; //P2 1,2,3,7设置成推勉输出
     P2M1 = 0x00;
 
 
-    P3M0 = 0x00;   
+    P3M0 = 0x00;   //普通IO
     P3M1 = 0x00;
 
-    P4M0 = 0x00;  
+    P4M0 = 0x00;  //普通IO
     P4M1 = 0x00;
 
     P5M0 = 0x00;
@@ -2170,23 +2259,23 @@ void main(void)
 
 	
 //***************************************************************************
-	P_SW2 |= 0x80;                  
-    PWMCFG = 0x08;                  
-	//PWMCR  = 0x04;					
-    PWMCKS = 0x00;                  
-    PWMC = CYCLE;                   
-                  
+	P_SW2 |= 0x80;                  //使能访问XSFR
+    PWMCFG = 0x08;                  //配置PWM5的输出初始电平为高电平
+	//PWMCR  = 0x04;					//配置PWM通道2、3、4、5受PWM波形发生器控制
+    PWMCKS = 0x0b;                  //选择PWM的时钟为Fosc/12
+    PWMC = CYCLE;                   //设置PWM周期
+                  					//输出频率=11059200/12/4096=225Hz
  //----------------------------------------------------------------------------------
-    PWM5T1 = 0;                  
-    PWM5T2 = 10;                
-                                    
-    PWM5CR = 0x00;                  
+    PWM5T1 = 0;                  //设置PWM5第1次反转的PWM计数
+    PWM5T2 = 10;                //设置PWM5第2次反转的PWM计数
+                                    //占空比为(PWM5T2-PWM5T1)/PWMC
+    PWM5CR = 0x00;                  //选择PWM5输出到P2.3,不使能PWM5中断
  //----------------------------------------------------------------------------------
 
 
-	PWMFDCR=0x30;                   
+	PWMFDCR=0x30;                   //打开PWM外部异常功能并发生PWM外部异常时，PWM的输出口立即被设置为高阻输入模式
     
-    //PWMCR |= 0x80;                  
+    //PWMCR |= 0x80;                  //使能PWM模块
 
     P_SW2 &= ~0x80;
 
@@ -2199,8 +2288,16 @@ void main(void)
   P_SW1 = ACC; 
  		
 	  */
-  							 
+  							  //串口2切换
  
+
+							  //PWM口切换
+	//P_SW2 &=~PWM2345_S;	  //PWM_2345_S=0 P3.7/PWM2 P2.1/PWM3 P2.2/PWM4 P2.3/PWM5 P2.4/PWMFLT
+ 	//P_SW2 |= PWM2345_S;		  //PWM_2345_S=1 P2.7/PWM2 P4.5/PWM3 P4.4/PWM4 P4.2/PWM5 P0.5/PWMFLT
+
+
+ 
+  
  UartInit();
 
  InitADC();
@@ -2213,23 +2310,16 @@ void main(void)
    
  //ES=1;
 
+ //IT0 = 0;    //设置INT0的中断类型为上升沿和下降沿
 
- IT0 = 1;      
+ IT0 = 1;      //设置INT0的中断类型为仅下降沿
  
 
  EA=1;
- T4=T5=1;
+
  read_mode();	
  read_data();
  fan_close_read();
-
-
- T4=T5=1;
- nop; nop; nop;
- nop; nop; nop;
- if((T4==0)&&(T5==0))       dev_address=3;
- else if((T4==1)&&(T5==0))  dev_address=4;
- else if((T4==0)&&(T5==1))  dev_address=5;
 
  nop;
  restar: nop; nop;
@@ -2237,11 +2327,10 @@ void main(void)
  lcd_clear(0x00);
 
  hot_in=1;
- power_run=0;
-	 
- Delay1ms(50);
 
- if(key_buf==fn_key)  
+	 
+
+ if(key_buf==fn_key)  //设定风扇延时关闭时间，按住功能键上电进入
   {
    speak=sp_bit=0;
    lcd_bl=0;
@@ -2254,9 +2343,9 @@ void main(void)
      {
 	  Delay1ms(50);
 
-	  if(key_buf==up_key)      {speak=sp_bit=0; fan_close_cnt++; if(fan_close_cnt>250) fan_close_cnt=250; dis1(1,fan_close_cnt);   Delay1ms(200);;}
+	  if(key_buf==up_key)      {speak=sp_bit=0; fan_close_cnt++; if(fan_close_cnt>250) fan_close_cnt=250; dis1(1,fan_close_cnt);   Delay1ms(100);}
 
-	  else if(key_buf==dn_key) {speak=sp_bit=0; fan_close_cnt--; if(fan_close_cnt<10)  fan_close_cnt=10;  dis1(1,fan_close_cnt);   Delay1ms(200);}
+	  else if(key_buf==dn_key) {speak=sp_bit=0; fan_close_cnt--; if(fan_close_cnt<1)   fan_close_cnt=1;   dis1(1,fan_close_cnt);   Delay1ms(100);}
 
 	  else if(key_buf==fn_key) {speak=sp_bit=0; fan_close_save();  while(key_buf==fn_key) WDT_CONTR=0X34; break;}
 	 }
@@ -2269,34 +2358,17 @@ void main(void)
 
  led5=0;
  out_clear_cnt=0;
- 
 
  while(1)
   {
-   Delay1ms(2);
-    nop;
-	nop;
-   
-	 if (g_need_process_datas) {       
-		
-		if (parse_recv_buffer(g_recv_buffer,g_recv_buffer_index)==2)   
-		   {   led1=~led1;}	  
-			  
-		g_recv_buffer_index = 0;
-		g_need_process_datas = 0;    				
-	  } 
-
-	if(power_on_bit) { power_on_bit=0; power_on_bit2=0; lcd_bl=0; power_bit=1; power_run=1; break; }
-
-	
-	if(key_buf==power_key) 
+   Delay1ms(50);
+   if(key_buf==power_key) 
     {
 	 speak=sp_bit=0; 
 	 led5=1;
 	 lcd_clear(0xff); 
 	 lcd_bl=0; 
 	 power_bit=1;  
-	 power_run=1;
 	 led6=0;	Delay1ms(200);
 	 led4=0;	Delay1ms(200);
 	 led2=0;	Delay1ms(200);
@@ -2309,10 +2381,13 @@ void main(void)
 	 //led1=led2=led3=1;
 	 //led4=led6=1;
 	 break;
-	}	
-  }	
-   
- 
+	}
+
+   out_clear_cnt++;
+   if(out_clear_cnt>20)  {out_clear_cnt=0;  out1=out2=out3=1;}
+
+  }
+
  restar2: nop; nop;
 
  led1=led2=led3=0;
@@ -2325,8 +2400,8 @@ void main(void)
 
  save_bit=0;
 
- tm1=Temperature_LPF(0);	 
- tm1 =get_temperature(tm1);	
+ tm1=Temperature_LPF(0);	 //上电后先读取一次温度值
+ tm1 =get_temperature(tm1);	//计算温度值
 
 
  hot_HT_bit=0;
@@ -2334,7 +2409,7 @@ void main(void)
  ss_cnt=0;
  auto_bit=0;
 
- hot_fan=1;	   
+ hot_fan=1;	   //测试下风扇输出有没有
  Delay1ms(200);
  hot_fan=0;
  
@@ -2343,114 +2418,69 @@ void main(void)
  while(1)
  {
    WDT_CONTR=0X34;
-
-   if (g_need_process_datas) {       
-		
-		if (parse_recv_buffer(g_recv_buffer,g_recv_buffer_index)==2)     
-			 {   led1=~led1;} 
-			  
-		g_recv_buffer_index = 0;
-		g_need_process_datas = 0;    			
-	}
-
-	if(save_all_bit) 
-	  {
-	   save_all_bit=0;
-
-	    save_mode_wr();    
-		fan_close_save();
-	   goto  restar2;
-	  }
-	  
-
-	if(mode_num_bit)  
-	  {
-	    mode_num_bit=0;
-		mode_chose(); 
-		save_mode_num();
-
-	  }
-
-	 if(tb_num_bit)	 
-	  {
-	   tb_num_bit=0;
-
-	   if(tb_num==0) tb_dis(0);
-
-	   else          tb_dis(1);
-		  
-		save_mode_wr();
-		fan_bit=0;
-				 
-		led1=led2=led3=1;
-	    led4=led5=led6=1;
-
-	    EX0=0; TR1=0; ET0=0;	 
-		out1=out2=out3=1;
-
-		hot_dis(0);  
-
-		fan_stop(); 
-
-		goto  restar2;
-	  }
-
-    if(power_on_bit2)	
-	 {
-	   power_on_bit2=0;
-	               lcd_clear(0x00); 
-	               lcd_bl=1;
-				   fan_bit=0;
-				   auto_bit=0;
-				   led1=led2=led3=1;
-	               led4=led5=led6=1;
-
-				   power_run=0;
-				   hot_fan=0;
-
-				   EX0=0; TR1=0; ET0=0;	 
-				   out1=out2=out3=1;
-
-				   hot_dis(0);  
-
-				   fan_stop();  
-				   goto  restar;
-
-	  }
-
-   if(tb_num==1) 
+     
+    if(tb_num==1) //检测同步功能有没有打开
+    {
+        if((hot_in == 0)&&(turn_bit == 0))  //检测到有同步信号过来 - 高电平
+        {
+            preheating_scan_bit = 1;   
+            turn_bit = 1;
+        }
+        if(hot_in==1)  //低电平
+        {
+            preheating_scan_bit = 0;  
+            preheating_strat_bit = 0;  
+            preheating_scan_cnt = 0;
+            preheating_strat_cnt = 0;
+            turn_bit = 0;            
+        }
+        if(preheating_strat_bit == 1)
+        {
+            tt1 = 65000;
+            dis1(1,100);
+        }
+        if(preheating_strat_bit == 0)
+        {
+            time_inset();
+            dis1(1,hot_num);
+        } 
+    }
+     
+   if(tb_num==1) //检测同步功能有没有打开
      {
 
-        if(hot_in==0)  
+        if(hot_in==0)  //检测到有同步信号过来
          {
 	       if(tb_bit==0)
 			 { 
 			  tb_bit=1;
 			  auto_bit=0;
-			  fan_close_bit=0; 
+			  fan_close_bit=0; //关闭风扇延时关闭
 
-			  fan_run_stop(fan_num);  
+			  if(hot_num>0)
+			   {
+			    fan_run_stop(fan_num);  //打开风扇
 
-			  hot_dis(1);  
+			    hot_dis(1);  //显示加热标志
 
-			  time=hot_num*14; if(time>time_max)  time=time_max;  
-			  time_inset();
-			  TH1=TL1=0; IE0=0; EX0=1; 						  
-
+			    time=hot_num*64; if(time>time_max)  time=time_max;  
+			    time_inset();
+			    TH1=TL1=0; IE0=0; EX0=1; //启动加热						  
+			   }
 
 	          }
 	      }
-		 else {	
+		 else {	//检测到有同步信号关闭
 			   if(tb_bit==1)
 			     {
 				   tb_bit=0;
 			       auto_bit=0;
 				   cnt4=cnt5=0;
-				   fan_close_bit=1;  
+				   fan_close_bit=1;  //打开风扇延时关闭
 
-				   hot_dis(0); 
+				   hot_dis(0);  //关闭加热标志
 
-				   EX0=0; TR1=0; ET0=0;	 
+				   EX0=0; TR1=0; ET0=0;	 //关闭加热
 				   out1=out2=out3=1;
 				  }
 
@@ -2460,25 +2490,29 @@ void main(void)
 
 	  }
 
-	else { 
+	else { //没有打开同步功能，按设置状态自动运行
 		  if(auto_bit==0)
 		    {
 			 auto_bit=1;
 			 
-			 fan_run_stop(fan_num); 
+			 fan_run_stop(fan_num); //打开风量
 
-			 hot_dis(1); 
+			 if(hot_num>0)
+			  {
+			   hot_dis(1);  //显示加热标志
 
-			 time=hot_num*14; if(time>time_max)	time=time_max;  
-			 time_inset();
-			 TH1=TL1=0; IE0=0; EX0=1; 
+			   time=hot_num*64; if(time>time_max)	time=time_max;  
+			   time_inset();
+			   TH1=TL1=0; IE0=0; EX0=1; //启动加热
+			  }
+			 else hot_bit=1;
 			}
 
 	     }
 
 
 
-   
+   //风扇图标旋转显示
    if(fan_bit2) { fan_bit2=0;  if(fan_bit3) {s13_dis(1); s14_dis(0);} else {s13_dis(0); s14_dis(1);} }
 
 
@@ -2489,10 +2523,10 @@ void main(void)
 	 dis_temp_bit=0;
 
      tm1=Temperature_LPF(0);
-     tm1 =get_temperature(tm1);	
+     tm1 =get_temperature(tm1);	//计算温度值
 
-	 tm6=Temperature_LPF(5);	
-     tm6 =get_temperature(tm6);	
+	 tm6=Temperature_LPF(5);	//测量可控管温度
+     tm6 =get_temperature(tm6);	//计算温度值
 
 	 if((dis_ss_bit==1)&&(temp_set_bit==0))  { if(tm1>0) dis1(1,tm1); }
 
@@ -2500,24 +2534,24 @@ void main(void)
 	 else                hot_ok=0;
 
 
-	 if((tm6>45)&&(hot_fan_bit==0))      {  hot_fan=1;   hot_fan_bit=1; } 
+	 if((tm6>45)&&(hot_fan_bit==0))      {  hot_fan=1;   hot_fan_bit=1; } //打开散热风扇
 
-	 else if((tm6<40)&&(hot_fan_bit==1)) {  hot_fan=0;   hot_fan_bit=0; power_bit=1; led5=0;} 
+	 else if((tm6<40)&&(hot_fan_bit==1)) {  hot_fan=0;   hot_fan_bit=0; power_bit=1; led5=0;} //关闭散热风扇
 
 	 if(tm6>100)  { power_bit=0; if(led5) {speak=sp_bit=0; jg_dis(0);} else jg_dis(1); }
 
 	  if(tm6>118)  { 
-	                 EX0=0; TR1=0; ET0=0;	 
+	                 EX0=0; TR1=0; ET0=0;	 //关闭加热
 				     out1=out2=out3=1; 
-					 hot_dis(0);  
+					 hot_dis(0);  //关闭加热标志
 					 jg_dis(1);
-					 hot_ok=1; 
-					  
+					 hot_ok=1; //给主板发高电平信号
+					  //显示警告标志
 					 while(1){
 							  Delay1ms(100);
 							  if(led5) { speak=sp_bit=0;  }
 							  
-							  if(key_buf==power_key)  
+							  if(key_buf==power_key)  //检测电源按键
 								{
 								  speak=sp_bit=0;
 				                  lcd_clear(0x00); 
@@ -2527,10 +2561,10 @@ void main(void)
 				                  led1=led2=led3=1;
 	                              led4=led5=led6=1;
 
-				                  EX0=0; TR1=0; ET0=0;	 
+				                  EX0=0; TR1=0; ET0=0;	 //关闭加热
 				                  out1=out2=out3=1;
 
-				                  fan_stop();  
+				                  fan_stop();  //关闭风扇
 
 				                  while(key_buf==power_key) WDT_CONTR=0X34;
 
@@ -2547,14 +2581,14 @@ void main(void)
 
 
 
-   if(hot_HT_bit) 
+   if(hot_HT_bit) //实测温度和加热设定值循环显示
       {
 	   hot_HT_bit=0;		
 				   
 
-       if(dis_ss_bit) {dis_ss_bit=0; temp_dis(0); bf_dis(1); dis1(1,hot_num); }	 
+       if(dis_ss_bit) {dis_ss_bit=0; temp_dis(0); bf_dis(1); dis1(1,hot_num); }	 //显示加执设定值 
 	  
-	   else           {dis_ss_bit=1; if(tm1>0) {temp_dis(1); bf_dis(0); dis1(1,tm1);}} 
+	   else           {dis_ss_bit=1; if(tm1>0) {temp_dis(1); bf_dis(0); dis1(1,tm1);}} //显示实测温度值
 	  } 
    
 
@@ -2564,19 +2598,19 @@ void main(void)
 
 
 					
-   
-   if(save_bit) {save_bit=0; temp_set_bit=0; hot_HT_bit=1; save_mode_wr(); }
+   //自动保存修改的数据
+   if(save_bit) {speak=sp_bit=0;save_bit=0; temp_set_bit=0; hot_HT_bit=1; save_mode_wr(); }
 
 
 
 
 
-   if(key_buf==power_key)  
+   if(key_buf==power_key)  //检测电源按键
       {
 	    t_cnt=150;
 			    
         while((key_buf==power_key)&&(t_cnt>0)) {t_cnt--; Delay1ms(10);}
-	    if(t_cnt==0)  
+	    if(t_cnt==0) //长按1.5秒关机 
 			      {
 				   speak=sp_bit=0;
 				   lcd_clear(0x00); 
@@ -2586,15 +2620,14 @@ void main(void)
 				   led1=led2=led3=1;
 	               led4=led5=led6=1;
 
-				   power_run=0;
 				   hot_fan=0;
 
-				   EX0=0; TR1=0; ET0=0;	 
+				   EX0=0; TR1=0; ET0=0;	 //关闭加热
 				   out1=out2=out3=1;
 
-				   hot_dis(0);  
+				   hot_dis(0);  //关闭加热标志
 
-				   fan_stop();  
+				   fan_stop();  //关闭风扇
 
 				   while(key_buf==power_key) WDT_CONTR=0X34;
 
@@ -2604,53 +2637,55 @@ void main(void)
 	  }
 
 
-	 
+	 //按fn键消除散热报警的电源按键灯闪动
 	if((key_buf==fn_key)&&(power_bit==0))      {speak=sp_bit=0; 	power_bit=1; led5=0;  while(key_buf==fn_key) WDT_CONTR=0X34;}
 
 
-    
+    //风力加
    if(key_buf==fn_up_key)      {speak=sp_bit=0; temp_set_bit=1; save_cnt=0; fan_num++; if(fan_num>6)   fan_num=6;     fan_dis(fan_num); if((tb_num==0)||((tb_num==1)&&(hot_in==0))) fan_run_stop(fan_num); while(key_buf==fn_up_key) WDT_CONTR=0X34;}
 
-   
+   //风力减
    else if(key_buf==fn_dn_key) {speak=sp_bit=0; temp_set_bit=1; save_cnt=0; if(fan_num==0) fan_num=0; else fan_num--; fan_dis(fan_num);	if((tb_num==0)||((tb_num==1)&&(hot_in==0))) fan_run_stop(fan_num); while(key_buf==fn_dn_key) WDT_CONTR=0X34;}
 
    
-   else if(key_buf==up_key)    
+   else if(key_buf==up_key) //加热加    
        {
 	     speak=sp_bit=0; temp_dis(0); bf_dis(1); temp_set_bit=1; 
 
 		 save_cnt=0; hot_num+=5; if(hot_num>100) hot_num=100; dis1(1,hot_num); 
 
-		 time=hot_num*14; if(time>time_max)	time=time_max;  time_inset();
+		 time=hot_num*64; if(time>time_max)	time=time_max;  time_inset();
 
-		 if(hot_bit)  {hot_bit=0; TH1=TL1=0; IE0=0; EX0=1; }
+		 if((hot_bit==1)&&(tb_num==0))  {hot_bit=0; TH1=TL1=0; IE0=0; EX0=1; }//启动加热
+
+		 else if((hot_in==0)&&(tb_num==1))	 { TH1=TL1=0; IE0=0; EX0=1; }//启动加热
 
 		 while(key_buf==up_key) WDT_CONTR=0X34;
 		}
 
    
-   else if(key_buf==dn_key)  
+   else if(key_buf==dn_key)  //加热减  
        {
 	    speak=sp_bit=0; temp_dis(0); bf_dis(1); temp_set_bit=1;
 
 	    save_cnt=0; if(hot_num>=5) hot_num-=5;  dis1(1,hot_num);
 
-		if(hot_num<5) {hot_num=0; EX0=0; TR1=0; ET0=0; out1=out2=out3=1; if(tb_num==0) hot_bit=1;} 
+		if(hot_num<5) {hot_num=0; EX0=0; TR1=0; ET0=0; out1=out2=out3=1; bf_dis(0); if(tb_num==0) hot_bit=1;} 
 
-		else {time=hot_num*14; if(time>time_max)	time=time_max;  time_inset(); }
-
+		else {time=hot_num*64; if(time>time_max)	time=time_max;  time_inset(); }
+		
 		while(key_buf==dn_key) WDT_CONTR=0X34;
 		
 	   }
 
 
-   
+   //模式选择
    if(key_buf==mode_key)  
     {
 	 t_cnt=150;
 			    
       while((key_buf==mode_key)&&(t_cnt>0)) {t_cnt--; Delay1ms(10);}
-	  if(t_cnt==0)  
+	  if(t_cnt==0) //长按1.5秒进入同步设定 
 			      {
 				   speak=sp_bit=0;
 
@@ -2660,7 +2695,7 @@ void main(void)
 
 				   while(key_buf==mode_key) WDT_CONTR=0X34;
 
-				  
+				   //temp_set_bit=1; save_cnt=0;
 				   save_mode_wr();
 
 				   fan_bit=0;
@@ -2668,31 +2703,51 @@ void main(void)
 				   led1=led2=led3=1;
 	               led4=led5=led6=1;
 
-				   EX0=0; TR1=0; ET0=0;	 
+				   EX0=0; TR1=0; ET0=0;	 //关闭加热
 				   out1=out2=out3=1;
 
-				   hot_dis(0);  
+				   hot_dis(0);  //关闭加热标志
 
-				   fan_stop();  
+				   fan_stop();  //关闭风扇
 
 				   goto  restar2;
 				  }
+		
+	   else	{ //模式选择
+	         speak=sp_bit=0; fan_bit=0; auto_bit=0; temp_set_bit=1; save_cnt=0; mode_num+=1; if(mode_num>5) mode_num=1; mode_chose(); save_mode_num(); while(key_buf==mode_key) WDT_CONTR=0X34; 
+	   		 if(tb_num==1)	 
+			                 { tb_bit=0; 
+							   EX0=0; TR1=0; ET0=0;	 //关闭加热
+			                   out1=out2=out3=1;  
+							   hot_dis(0);  //关闭加热标志
+							   fan_stop();  //关闭风扇
+							  }
 
-	   else	{ speak=sp_bit=0; fan_bit=0; auto_bit=0; temp_set_bit=1; save_cnt=0; mode_num+=1; if(mode_num>5) mode_num=1; mode_chose(); save_mode_num(); while(key_buf==mode_key) WDT_CONTR=0X34; }
+			  if(hot_num==0) 
+			                 { tb_bit=0; 
+							   EX0=0; TR1=0; ET0=0;	 //关闭加热
+			                   out1=out2=out3=1;  
+							   hot_dis(0);  //关闭加热标志
+							   fan_stop();  //关闭风扇
+							   if(tb_num==0) hot_bit=1;
+							   else          hot_bit=0;
+							  }
+	   
+	         }	
 			 
 	}
 
    
    
-   
-   if(key_buf==fd_key) 
+   //分段选择或温度设定
+   if(key_buf==fd_key) //减键 
      { 
 			  t_cnt=150;
 			    
 
 		      while((key_buf==fd_key)&&(t_cnt>0)) {t_cnt--; Delay1ms(10);}
 
-			  if(t_cnt==0) 
+			  if(t_cnt==0) //长按1.5秒进入温度设定 
 			      {
 				   speak=sp_bit=0; 
 				   temp_dis(1);
@@ -2732,7 +2787,7 @@ void main(void)
 					  
 				  }
 			  else {speak=sp_bit=0; temp_set_bit=1; save_cnt=0; fenduan_num++; if(fenduan_num>7) fenduan_num=1; hot_select(fenduan_num); while(key_buf==fd_key) WDT_CONTR=0X34;}
-					
+					//短按分段选择
 	  }
    
 		  
@@ -2745,7 +2800,3 @@ void main(void)
 
 
 }
-
-
- 
-	 
